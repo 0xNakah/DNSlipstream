@@ -13,6 +13,26 @@ def print_header(msg):
     print(f"  {msg}")
     print(f"{'='*60}\n")
 
+def generate_embedded_config(domain_name, encryption_key):
+    """Generate embedded config file with key and domain."""
+    print("Generating embedded config...")
+    
+    config_content = f"""# lib/config_embedded.py
+# This file is AUTO-GENERATED during build
+# DO NOT EDIT MANUALLY - Your changes will be overwritten
+
+# Embedded at build time
+ENCRYPTION_KEY = "{encryption_key}"
+DOMAIN_NAME = "{domain_name}"
+"""
+    
+    with open('lib/config_embedded.py', 'w') as f:
+        f.write(config_content)
+    
+    print(f"✓ Embedded config created")
+    print(f"  Domain: {domain_name}")
+    print(f"  Key: {encryption_key[:16]}...{encryption_key[-8:]}")
+
 
 def build_client(domain_name, encryption_key):
     """Build client binary."""
@@ -119,6 +139,8 @@ def build_all(domain_name, encryption_key):
         sys.exit(1)
     
     try:
+        generate_embedded_config(domain_name, encryption_key)
+
         build_client(domain_name, encryption_key)
         build_server(domain_name, encryption_key)
         
@@ -170,8 +192,10 @@ def main():
         if args.target == 'all':
             build_all(args.domain, args.key)
         elif args.target == 'client':
+            generate_embedded_config(args.domain, args.key)
             build_client(args.domain, args.key)
         elif args.target == 'server':
+            generate_embedded_config(args.domain, args.key)
             build_server(args.domain, args.key)
     except KeyboardInterrupt:
         print("\n\nBuild cancelled")

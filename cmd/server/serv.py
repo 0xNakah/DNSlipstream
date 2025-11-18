@@ -10,17 +10,41 @@ import binascii
 from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE
 from dnslib.server import DNSServer, BaseResolver
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
 from cmd.server import cli
 
 
-# Configuration - set via environment or command line
-TARGET_DOMAIN = os.getenv('TARGET_DOMAIN', 'c.example.com')
-ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+# Try to import embedded config first
+try:
+    from lib.config_embedded import ENCRYPTION_KEY as EMBEDDED_KEY
+    from lib.config_embedded import DOMAIN_NAME as EMBEDDED_DOMAIN
+except ImportError:
+    EMBEDDED_KEY = None
+    EMBEDDED_DOMAIN = None
+
+# Get from environment or embedded config
+TARGET_DOMAIN = os.getenv('DOMAIN_NAME') or EMBEDDED_DOMAIN or 'c.example.com'
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY') or EMBEDDED_KEY or ''
+
+# Validate
+if not ENCRYPTION_KEY:
+    print("ERROR: ENCRYPTION_KEY not set!")
+    print("\nOptions:")
+    print("  1. Build with embedded key:")
+    print("     python build_binaries.py all --domain c.example.com")
+    print("  2. Or set environment variable:")
+    print("     export ENCRYPTION_KEY=$(python3 -c 'from os import urandom; print(urandom(32).hex())')")
+    sys.exit(1)
+
+if len(ENCRYPTION_KEY) != 64:
+    print(f"ERROR: Invalid key length: {len(ENCRYPTION_KEY)} (expected 64)")
+    sys.exit(1)
+
+print(f"=== DNSlipstream Server ===")
 
 # Share state with CLI module
 cli.encryption_key = ENCRYPTION_KEY

