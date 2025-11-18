@@ -14,13 +14,17 @@ sessions_map = {}
 encryption_key = ""
 target_domain = ""
 
-class ChashellCompleter(Completer):
-    """Auto-completion for chashell commands."""
+
+class ShellCompleter(Completer):
+    """Auto-completion for Shell commands."""
     
     def __init__(self):
         self.commands = {
-            'sessions': 'Interact with the specified machine.',
-            'exit': 'Stop the Chashell Server'
+            'sessions': 'List or interact with sessions',
+            'ls': 'Alias for sessions (list sessions)',
+            'use': 'Interact with a specific session',
+            'exit': 'Stop the Shell Server',
+            'help': 'Show available commands'
         }
     
     def get_completions(self, document, complete_event):
@@ -39,8 +43,8 @@ class ChashellCompleter(Completer):
                 if cmd.startswith(word):
                     yield Completion(cmd, start_position=-len(word), display_meta=desc)
         
-        # Complete session IDs for 'sessions' command
-        elif len(args) == 2 and args[0] == 'sessions':
+        # Complete session IDs for 'sessions' or 'use' commands
+        elif len(args) == 2 and args[0] in ['sessions', 'use']:
             word = args[1]
             for client_guid in sessions_map.keys():
                 if client_guid.startswith(word):
@@ -52,6 +56,46 @@ class ChashellCompleter(Completer):
                         display_meta=hostname
                     )
 
+
+def display_sessions():
+    """Display all active sessions with detailed information."""
+    if not sessions_map:
+        print("No active sessions")
+        return
+    
+    print("\n╔══════════════════════════════════════════════════════════════════╗")
+    print("║                        Active Sessions                           ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    print("║ Client ID            │ Hostname            │ Status              ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    
+    import time
+    now = time.time()
+    
+    for client_guid, session in sessions_map.items():
+        # Calculate time since last heartbeat
+        last_seen = int(now - session.heartbeat)
+        
+        # Determine status
+        if current_session == client_guid:
+            status = "ACTIVE"
+        elif last_seen < 10:
+            status = f"IDLE ({last_seen}s)"
+        else:
+            status = f"STALE ({last_seen}s)"
+        
+        # Get hostname
+        hostname = session.hostname if hasattr(session, 'hostname') else 'unknown'
+        
+        # Format output
+        guid_short = client_guid[:18] + ".." if len(client_guid) > 18 else client_guid
+        hostname_short = hostname[:18] + ".." if len(hostname) > 18 else hostname
+        
+        print(f"║ {guid_short:<20} │ {hostname_short:<19} │ {status:<19} ║")
+    
+    print("╚══════════════════════════════════════════════════════════════════╝\n")
+
+
 def interact(session_id: str):
     """
     Interact with a specific session.
@@ -60,21 +104,37 @@ def interact(session_id: str):
         session_id: The client GUID to interact with
     """
     global current_session
-
+    
+    # Validate session exists
+    if session_id not in sessions_map:
+        print(f"Error: Session {session_id} not found")
+        return
+    
+    # Get session info
+    session_info = sessions_map[session_id]
+    hostname = getattr(session_info, 'hostname', 'unknown')
+    
     # Print buffered console output if available
     if session_id in console_buffer:
         buffer = console_buffer[session_id]
         for line in buffer:
             print(line, end='')
         console_buffer[session_id] = []
-
+    
     current_session = session_id
-
+    
     # Convert hex session id to bytes for encode()
-    client_guid = bytes.fromhex(session_id)   # <<< ADD THIS
-
+    client_guid = bytes.fromhex(session_id)
+    
+    # Show interaction banner
+    print(f"\n{'='*60}")
+    print(f"  Connected to: {hostname}")
+    print(f"  Session ID:   {session_id[:16]}...")
+    print(f"  Type 'background' to return to main menu")
+    print(f"{'='*60}\n")
+    
     session = PromptSession(history=InMemoryHistory())
-
+    
     try:
         while True:
             try:
@@ -83,35 +143,59 @@ def interact(session_id: str):
                 continue
             except EOFError:
                 break
-
+            
             if line.strip() == "background":
+                print("\nReturning to main menu...")
                 current_session = None
                 return
-
+            
+            if not line.strip():
+                continue
+            
             # Use client_guid here instead of None
             init_packet, data_packets = encode(
                 (line + "\n").encode(),
                 False,          # is_request = False for server->client
                 encryption_key,
                 target_domain,
-                client_guid     # <<< FIXED
+                client_guid
             )
-
+            
             if session_id not in packet_queue:
                 packet_queue[session_id] = []
-
+            
             packet_queue[session_id].append(init_packet)
             for packet in data_packets:
                 packet_queue[session_id].append(packet)
-
+    
     except Exception as e:
         print(f"Error during interaction: {e}")
     finally:
         current_session = None
 
+
+def show_help():
+    """Display help information."""
+    print("\n╔══════════════════════════════════════════════════════════════════╗")
+    print("║                     DNSlipstream Server CLI                      ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    print("║ Command          │ Description                                   ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    print("║ sessions         │ List all active sessions                      ║")
+    print("║ ls               │ Alias for 'sessions'                          ║")
+    print("║ sessions <id>    │ Interact with specific session                ║")
+    print("║ use <id>         │ Alias for 'sessions <id>'                     ║")
+    print("║ help             │ Show this help message                        ║")
+    print("║ exit             │ Shutdown the server                           ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    print("║ During Session:                                                  ║")
+    print("║ background       │ Return to main menu (keep session alive)      ║")
+    print("╚══════════════════════════════════════════════════════════════════╝\n")
+
+
 def executor(command: str):
     """
-    Execute a chashell command.
+    Execute a Shell command.
     
     Args:
         command: The command string to execute
@@ -124,55 +208,87 @@ def executor(command: str):
     cmd = args[0]
     
     if cmd == "exit":
-        print("Exiting.")
+        print("\n[*] Shutting down server...")
         sys.exit(0)
     
-    elif cmd == "sessions":
+    elif cmd == "help":
+        show_help()
+    
+    elif cmd in ["sessions", "ls"]:
         if len(args) == 2:
+            # Interact with specific session
             session_id = args[1]
-            if session_id in sessions_map:
-                print(f"Interacting with session {session_id}.")
-                interact(session_id)
+            
+            # Try to find by partial match
+            matches = [guid for guid in sessions_map.keys() if guid.startswith(session_id)]
+            
+            if len(matches) == 1:
+                interact(matches[0])
+            elif len(matches) > 1:
+                print(f"Error: Ambiguous session ID. Matches: {len(matches)}")
+                for match in matches:
+                    hostname = getattr(sessions_map[match], 'hostname', 'unknown')
+                    print(f"  {match[:16]}... - {hostname}")
             else:
-                print(f"Error: Session {session_id} not found")
+                print(f"Error: Session '{session_id}' not found")
         else:
             # List all sessions
-            if sessions_map:
-                print("\nActive sessions:")
-                for guid, info in sessions_map.items():
-                    hostname = getattr(info, 'hostname', 'unknown')
-                    print(f"  {guid[:16]}... - {hostname}")
+            display_sessions()
+    
+    elif cmd == "use":
+        if len(args) == 2:
+            session_id = args[1]
+            
+            # Try to find by partial match
+            matches = [guid for guid in sessions_map.keys() if guid.startswith(session_id)]
+            
+            if len(matches) == 1:
+                interact(matches[0])
+            elif len(matches) > 1:
+                print(f"Error: Ambiguous session ID. Matches: {len(matches)}")
+                for match in matches:
+                    hostname = getattr(sessions_map[match], 'hostname', 'unknown')
+                    print(f"  {match[:16]}... - {hostname}")
             else:
-                print("No active sessions")
+                print(f"Error: Session '{session_id}' not found")
+        else:
+            print("Usage: use <session_id>")
     
     else:
-        print(f"Unknown command: {cmd}")
-        print("Available commands: sessions, exit")
+        print(f"Unknown command: '{cmd}'")
+        print("Type 'help' for available commands")
+
 
 def run_cli():
     """Run the interactive CLI."""
-    completer = ChashellCompleter()
+    completer = ShellCompleter()
     session = PromptSession(
         completer=completer,
         history=InMemoryHistory()
     )
     
-    print("Chashell Server - Interactive CLI")
-    print("Type 'sessions <id>' to interact with a client")
-    print("Type 'exit' to quit\n")
+    print("\n╔══════════════════════════════════════════════════════════════════╗")
+    print("║               DNSlipstream Server - Interactive CLI              ║")
+    print("╠══════════════════════════════════════════════════════════════════╣")
+    print("║  Type 'help' for available commands                              ║")
+    print("║  Type 'sessions' to list active clients                          ║")
+    print("║  Type 'use <id>' to interact with a client                       ║")
+    print("╚══════════════════════════════════════════════════════════════════╝\n")
     
     while True:
         try:
-            command = session.prompt('chashell >>> ')
+            command = session.prompt('shell >>> ')
             if command.strip():
                 executor(command)
         except KeyboardInterrupt:
+            print()  # New line after Ctrl+C
             continue
         except EOFError:
-            print("\nExiting.")
+            print("\n[*] Exiting...")
             sys.exit(0)
         except Exception as e:
             print(f"Error: {e}")
+
 
 if __name__ == "__main__":
     run_cli()
