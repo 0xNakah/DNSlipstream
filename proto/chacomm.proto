@@ -1,0 +1,35 @@
+// [START declaration]
+syntax = "proto3";
+package protocol;
+// [END declaration]
+
+// [START messages]
+
+message Message {
+    bytes clientguid = 1;
+    oneof packet {
+        ChunkStart chunkstart = 2;
+        ChunkData chunkdata = 3;
+        PollQuery pollquery = 4;
+        InfoPacket infopacket = 5;
+    }
+}
+
+message ChunkStart {
+    int32 chunkid = 1; // Chunk identifier
+    int32 chunksize = 2; // Chunk count
+}
+
+message ChunkData {
+    int32 chunkid = 1; // Chunk identifier
+    int32 chunknum = 2; // Current chunk identifier
+    bytes packet = 3; // Data
+}
+
+message PollQuery {
+
+}
+
+message InfoPacket {
+    bytes hostname = 1;
+}
