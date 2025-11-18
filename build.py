@@ -18,29 +18,48 @@ def build_client(domain_name, encryption_key):
     """Build client binary."""
     print_header("Building Client Binary")
     
-    # Create build command
+    # Base command
     cmd = [
         'pyinstaller',
-        '--onefile',                    # Single executable
-        '--name', 'dnslipstream',       # Output name (like 'chashell')
+        '--onefile',
+        '--name', 'dnslipstream',
         '--clean',
         '--noconfirm',
-        '--add-data', 'lib:lib',        # Include lib directory
-        f'--add-data=lib/protocol/comm_pb2.py:lib/protocol',
+        '--console',
+        
+        # Hidden imports for PyNaCl and dependencies
+        '--hidden-import', '_cffi_backend',
+        '--hidden-import', 'nacl',
+        '--hidden-import', 'nacl.secret',
+        '--hidden-import', 'nacl.bindings',
+        '--hidden-import', 'nacl.encoding',
+        '--hidden-import', 'nacl.utils',
+        
+        # Hidden imports for your modules
         '--hidden-import', 'lib.protocol.comm_pb2',
         '--hidden-import', 'lib.transport.stream',
+        '--hidden-import', 'lib.transport.encoding',
+        '--hidden-import', 'lib.transport.dns',
+        '--hidden-import', 'lib.transport.polling',
         '--hidden-import', 'lib.crypto.symetric',
+        '--hidden-import', 'lib.spliting.split',
         '--hidden-import', 'lib.logging',
-        '--console',
+        
+        # Hidden imports for other dependencies
+        '--hidden-import', 'dns',
+        '--hidden-import', 'dns.resolver',
+        '--hidden-import', 'dns.message',
+        '--hidden-import', 'dns.query',
+        
+        # Collect all submodules
+        '--collect-all', 'nacl',
+        '--collect-all', 'cffi',
+        '--collect-all', '_cffi_backend',
+        
         'cmd/shell/shell.py'
     ]
     
-    # On Windows, use semicolon for --add-data
-    if sys.platform == 'win32':
-        cmd = [arg.replace(':', ';') if '--add-data' in arg else arg for arg in cmd]
-    
     subprocess.run(cmd, check=True)
-    
     print(f"✓ Client binary created: dist/dnslipstream")
 
 
@@ -51,28 +70,45 @@ def build_server(domain_name, encryption_key):
     cmd = [
         'pyinstaller',
         '--onefile',
-        '--name', 'dnslipstream-server',  # Like 'chaserv'
+        '--name', 'dnslipstream-server',
         '--clean',
         '--noconfirm',
-        '--add-data', 'lib:lib',
-        '--add-data', 'cmd/server/cli.py:cmd/server',
+        '--console',
+        
+        # Hidden imports for PyNaCl
+        '--hidden-import', '_cffi_backend',
+        '--hidden-import', 'nacl',
+        '--hidden-import', 'nacl.secret',
+        '--hidden-import', 'nacl.bindings',
+        
+        # Hidden imports for your modules
         '--hidden-import', 'lib.protocol.comm_pb2',
         '--hidden-import', 'lib.crypto.symetric',
+        '--hidden-import', 'lib.logging',
+        '--hidden-import', 'cmd.server.cli',
+        
+        # Hidden imports for dnslib
         '--hidden-import', 'dnslib',
+        '--hidden-import', 'dnslib.server',
+        
+        # Hidden imports for prompt_toolkit
         '--hidden-import', 'prompt_toolkit',
-        '--console',
+        '--hidden-import', 'prompt_toolkit.completion',
+        
+        # Collect all submodules
+        '--collect-all', 'nacl',
+        '--collect-all', 'cffi',
+        '--collect-all', 'dnslib',
+        '--collect-all', 'prompt_toolkit',
+        
         'cmd/server/serv.py'
     ]
     
-    if sys.platform == 'win32':
-        cmd = [arg.replace(':', ';') if '--add-data' in arg else arg for arg in cmd]
-    
     subprocess.run(cmd, check=True)
-    
     print(f"✓ Server binary created: dist/dnslipstream-server")
 
 
-def build_all(domain_name, encryption_key, osarch=None):
+def build_all(domain_name, encryption_key):
     """Build both client and server."""
     print_header("DNSlipstream Binary Builder")
     
@@ -88,22 +124,21 @@ def build_all(domain_name, encryption_key, osarch=None):
         
         print_header("Build Complete!")
         
-        # Show output files
         print("Binaries created:")
-        print(f"  Client: dist/dnslipstream")
-        print(f"  Server: dist/dnslipstream-server")
+        print(f"  Client: dist/dnslipstream.exe")
+        print(f"  Server: dist/dnslipstream-server.exe")
         print()
         
         print("Usage:")
         print(f"\n  Server:")
-        print(f"    export ENCRYPTION_KEY={encryption_key}")
-        print(f"    export DOMAIN_NAME={domain_name}")
-        print(f"    sudo -E ./dist/dnslipstream-server")
+        print(f"    set ENCRYPTION_KEY={encryption_key}")
+        print(f"    set DOMAIN_NAME={domain_name}")
+        print(f"    .\\dist\\dnslipstream-server.exe")
         
         print(f"\n  Client:")
-        print(f"    export ENCRYPTION_KEY={encryption_key}")
-        print(f"    export DOMAIN_NAME={domain_name}")
-        print(f"    ./dist/dnslipstream")
+        print(f"    set ENCRYPTION_KEY={encryption_key}")
+        print(f"    set DOMAIN_NAME={domain_name}")
+        print(f"    .\\dist\\dnslipstream.exe")
         print()
         
     except subprocess.CalledProcessError as e:
@@ -119,8 +154,6 @@ def main():
                        help='Target domain name')
     parser.add_argument('--key', 
                        help='Encryption key (auto-generated if not provided)')
-    parser.add_argument('--osarch', 
-                       help='Target OS/Arch (e.g., linux/amd64, windows/386)')
     parser.add_argument('target', 
                        choices=['all', 'client', 'server'],
                        help='What to build')
@@ -135,7 +168,7 @@ def main():
     
     try:
         if args.target == 'all':
-            build_all(args.domain, args.key, args.osarch)
+            build_all(args.domain, args.key)
         elif args.target == 'client':
             build_client(args.domain, args.key)
         elif args.target == 'server':

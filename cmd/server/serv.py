@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
-import cli
+from cmd.server import cli
 
 
 # Configuration - set via environment or command line

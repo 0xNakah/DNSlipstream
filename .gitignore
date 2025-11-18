@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Compiled Python files
+*.pyc
+*.pyo
+
+# Distribution / packaging
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+dnslipstream.log
+
+# Encryption keys (IMPORTANT - don't commit keys!)
+*.key
+dnslipstream.key
+
+# Config files with sensitive data
+config.yaml
+.env
+
+# Protocol buffers (generated, can be regenerated)
+lib/protocol/comm_pb2.py
+lib/protocol/*_pb2.py
+
+# OS-specific
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
