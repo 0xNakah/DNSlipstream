@@ -1,5 +1,6 @@
 # cmd/server/cli.py
 import sys
+import time
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import InMemoryHistory
@@ -23,6 +24,9 @@ class ShellCompleter(Completer):
             'sessions': 'List or interact with sessions',
             'ls': 'Alias for sessions (list sessions)',
             'use': 'Interact with a specific session',
+            'save': 'Manually save all sessions',
+            'restore': 'Restore sessions from disk',
+            'clear': 'Clear saved session data',
             'exit': 'Stop the Shell Server',
             'help': 'Show available commands'
         }
@@ -54,8 +58,7 @@ class ShellCompleter(Completer):
                         client_guid, 
                         start_position=-len(word),
                         display_meta=hostname
-                    )
-
+                    )              
 
 def display_sessions():
     """Display all active sessions with detailed information."""
@@ -69,7 +72,6 @@ def display_sessions():
     print("║ Client ID            │ Hostname            │ Status              ║")
     print("╠══════════════════════════════════════════════════════════════════╣")
     
-    import time
     now = time.time()
     
     for client_guid, session in sessions_map.items():
@@ -113,6 +115,13 @@ def interact(session_id: str):
     # Get session info
     session_info = sessions_map[session_id]
     hostname = getattr(session_info, 'hostname', 'unknown')
+
+    # Show interaction banner
+    print(f"\n{'='*60}")
+    print(f"  Connected to: {hostname}")
+    print(f"  Session ID:   {session_id[:16]}...")
+    print(f"  Type 'background' to return to main menu")
+    print(f"{'='*60}\n")
     
     # Print buffered console output if available
     if session_id in console_buffer:
@@ -125,13 +134,6 @@ def interact(session_id: str):
     
     # Convert hex session id to bytes for encode()
     client_guid = bytes.fromhex(session_id)
-    
-    # Show interaction banner
-    print(f"\n{'='*60}")
-    print(f"  Connected to: {hostname}")
-    print(f"  Session ID:   {session_id[:16]}...")
-    print(f"  Type 'background' to return to main menu")
-    print(f"{'='*60}\n")
     
     session = PromptSession(history=InMemoryHistory())
     
@@ -185,12 +187,18 @@ def show_help():
     print("║ ls               │ Alias for 'sessions'                          ║")
     print("║ sessions <id>    │ Interact with specific session                ║")
     print("║ use <id>         │ Alias for 'sessions <id>'                     ║")
+    print("║ persist <id>     │ Install persistence on specified session      ║")
+    print("║ save             │ Manually save all sessions                    ║")
+    print("║ restore          │ Restore sessions from disk                    ║")
+    print("║ clear            │ Clear saved session data                      ║")
     print("║ help             │ Show this help message                        ║")
     print("║ exit             │ Shutdown the server                           ║")
     print("╠══════════════════════════════════════════════════════════════════╣")
     print("║ During Session:                                                  ║")
     print("║ background       │ Return to main menu (keep session alive)      ║")
     print("╚══════════════════════════════════════════════════════════════════╝\n")
+
+
 
 
 def executor(command: str):
@@ -254,6 +262,44 @@ def executor(command: str):
         else:
             print("Usage: use <session_id>")
     
+    elif cmd == "save":
+        # Manually save sessions
+        from lib.persistence.session_store import SessionStore
+        store = SessionStore()
+        success, msg = store.save_sessions(sessions_map, console_buffer, packet_queue)
+        print(f"[{'+'  if success else '-'}] {msg}")
+    
+    elif cmd == "restore":
+        # Manually restore sessions
+        from lib.persistence.session_store import SessionStore, SessionRecovery
+        from cmd.server.serv import ClientInfo
+        
+        store = SessionStore()
+        sessions_data, buffers, queues = store.load_sessions()
+        
+        if not sessions_data:
+            print("[-] No saved sessions found")
+        else:
+            restored = 0
+            for guid, data in sessions_data.items():
+                if guid not in sessions_map:
+                    sessions_map[guid] = SessionRecovery.restore_session(guid, data, ClientInfo)
+                    restored += 1
+                    print(f"[+] Restored: {guid[:16]}... ({data['hostname']})")
+            
+            console_buffer.update(buffers)
+            packet_queue.update(queues)
+            print(f"\n[+] Restored {restored} sessions")
+    
+    elif cmd == "clear":
+        # Clear saved sessions
+        from lib.persistence.session_store import SessionStore
+        store = SessionStore()
+        if store.clear_sessions():
+            print("[+] Cleared all saved sessions")
+        else:
+            print("[-] Failed to clear sessions")
+
     else:
         print(f"Unknown command: '{cmd}'")
         print("Type 'help' for available commands")

