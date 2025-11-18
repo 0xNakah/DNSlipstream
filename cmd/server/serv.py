@@ -27,8 +27,8 @@ except ImportError:
     EMBEDDED_DOMAIN = None
 
 # Get from environment or embedded config
-TARGET_DOMAIN = os.getenv('DOMAIN_NAME') or EMBEDDED_DOMAIN or 'c.example.com'
-ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY') or EMBEDDED_KEY or ''
+TARGET_DOMAIN = EMBEDDED_DOMAIN or 'c.example.com'
+ENCRYPTION_KEY = EMBEDDED_KEY or ''
 
 # Validate
 if not ENCRYPTION_KEY:
