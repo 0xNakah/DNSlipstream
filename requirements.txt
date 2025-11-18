@@ -1,0 +1,5 @@
+pynacl
+protobuf
+dnslib
+prompt_toolkit
+dnspython
