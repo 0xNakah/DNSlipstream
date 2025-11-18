@@ -4,8 +4,8 @@ import os
 import subprocess
 import platform
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from lib.transport.stream import dns_stream
-
 
 # Configuration - these should be set via command line or environment variables
 TARGET_DOMAIN = os.getenv('TARGET_DOMAIN', 'c.example.com')

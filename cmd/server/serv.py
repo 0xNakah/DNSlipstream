@@ -10,6 +10,8 @@ import binascii
 from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE
 from dnslib.server import DNSServer, BaseResolver
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
