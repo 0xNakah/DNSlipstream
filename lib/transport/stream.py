@@ -162,14 +162,18 @@ class DNSStream:
         Send initialization packet with appropriate record type.
         
         Args:
-            init_packet: Encoded init packet
+            init_packet: Encoded init packet (str from dns_marshal)
             record_type: DNS record type to use
         """
         try:
             if self.enable_multi_channel:
-                send_dns_query_multi(init_packet.encode(), self.target_domain, record_type)
+                # BUG #1 FIX: dns_marshal() returns a str — pass it directly.
+                # Previously: send_dns_query_multi(init_packet.encode(), ...)
+                # .encode() was wrapping the hex string in UTF-8 bytes, corrupting
+                # the payload. send_dns_query_multi accepts str.
+                send_dns_query_multi(init_packet, self.target_domain, record_type)
             else:
-                send_dns_query(init_packet.encode(), self.target_domain)
+                send_dns_query(init_packet, self.target_domain)
             
             # Track record type usage
             with self.stats_lock:
@@ -246,12 +250,12 @@ class DNSStream:
         
         return successful_count
 
-    def _send_packet_with_retry(self, packet, domain, max_retries=2):
+    def _send_packet_with_retry(self, packet: str, domain: str, max_retries: int = 2) -> bool:
         """
         Send single packet with retry logic (TXT only, legacy mode).
         
         Args:
-            packet: Encoded packet data
+            packet: Encoded packet data (str returned by dns_marshal)
             domain: Target domain
             max_retries: Maximum retry attempts
             
@@ -260,7 +264,11 @@ class DNSStream:
         """
         for attempt in range(max_retries + 1):
             try:
-                send_dns_query(packet.encode(), domain)
+                # BUG #1 FIX: packet is already a str from dns_marshal().
+                # The previous code called packet.encode() here, which wrapped the
+                # hex string in UTF-8 bytes instead of passing the raw DNS payload.
+                # send_dns_query() accepts str directly.
+                send_dns_query(packet, domain)
                 return True
             except Exception as e:
                 if attempt < max_retries:
@@ -271,7 +279,7 @@ class DNSStream:
                     return False
         return False
 
-    def _send_packet_multi_with_retry(self, packet, domain, record_type, max_retries=2):
+    def _send_packet_multi_with_retry(self, packet: str, domain: str, record_type: str, max_retries: int = 2) -> bool:
         """
         Send single packet with specific record type and retry logic.
         
@@ -281,7 +289,7 @@ class DNSStream:
         - Silent failure handling
         
         Args:
-            packet: Encoded packet data
+            packet: Encoded packet data (str returned by dns_marshal)
             domain: Target domain
             record_type: DNS record type to use
             max_retries: Maximum retry attempts
@@ -291,7 +299,11 @@ class DNSStream:
         """
         for attempt in range(max_retries + 1):
             try:
-                send_dns_query_multi(packet.encode(), domain, record_type)
+                # BUG #1 FIX: packet is already a str from dns_marshal().
+                # The previous code called packet.encode() here, which wrapped the
+                # hex string in UTF-8 bytes instead of passing the raw DNS payload.
+                # send_dns_query_multi() accepts str directly.
+                send_dns_query_multi(packet, domain, record_type)
                 return True
             except Exception as e:
                 if attempt < max_retries:
