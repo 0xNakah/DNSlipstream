@@ -217,7 +217,8 @@ def encode(payload: bytes, is_request: bool, encryption_key: str,
     
     # Iterate over every chunk
     for chunk_num, packet_data in enumerate(packets):
-        # Optionally vary record type per chunk for enhanced evasion
+        # All chunks use the session record type.
+        # _maybe_vary_record_type() is intentionally a no-op (see its docstring).
         chunk_record_type = _maybe_vary_record_type(record_type, chunk_num, len(packets))
         
         # Generate the "data" packet, containing the current chunk information and data
@@ -296,13 +297,19 @@ def _get_optimal_chunk_size(record_type: str, target_domain: str, client_guid: b
     Args:
         record_type: DNS record type
         target_domain: Target domain (for overhead calculation)
-        client_guid: Client GUID (for overhead calculation)
+        client_guid: Client GUID bytes (16 bytes → 32 hex chars on the wire)
         
     Returns:
         Optimal chunk size in bytes
     """
-    # Calculate base overhead from domain and GUID
-    base_overhead = len(target_domain) + len(client_guid) + (24 * 2)  # nonce overhead
+    # BUG #3 FIX: client_guid is 16 raw bytes but is transmitted as hex,
+    # consuming len(client_guid) * 2 characters in the DNS label budget.
+    # The old code used len(client_guid) = 16, undercounting by 16 chars
+    # and causing occasional label-limit overflows.
+    # len(target_domain) is already a char count so it is unchanged.
+    # Nonce: 24 bytes = 48 hex chars = 24 * 2, unchanged.
+    guid_hex_len = len(client_guid) * 2  # 16 bytes -> 32 hex chars
+    base_overhead = len(target_domain) + guid_hex_len + (24 * 2)  # nonce overhead
     
     # Record type specific capacity limits
     # These are conservative estimates to ensure reliability
@@ -326,40 +333,29 @@ def _get_optimal_chunk_size(record_type: str, target_domain: str, client_guid: b
 
 def _maybe_vary_record_type(base_type: str, chunk_num: int, total_chunks: int) -> str:
     """
-    Optionally vary record type per chunk for enhanced evasion.
-    
-    Strategy:
-    - 80% of time: use base type (consistency)
-    - 20% of time: switch to compatible type (diversity)
-    - Never switch on first/last chunk (protocol reliability)
-    
+    Returns the base record type unchanged for all chunks.
+
+    BUG #2 FIX: The original implementation varied the record type on 20% of
+    middle chunks by randomly switching to a compatible alternative type (e.g.
+    TXT -> MX/CNAME). While dots are stripped before hex-decoding on the server
+    side (so the hex content is not corrupted), the chunk capacity budget is
+    calculated once at encode() time using the session record type. A varied
+    chunk type has a different label width, which can push the total DNS name
+    length (labels + dots + domain) past the 253-char RFC limit for A/AAAA
+    chunks in particular, causing silent truncation.
+
+    Record-type diversity for evasion is still achieved at the session level
+    via _select_encode_record_type(), which picks a type per session based on
+    payload size. Per-chunk variation is not needed and is disabled here.
+
     Args:
-        base_type: Primary record type for this payload
-        chunk_num: Current chunk number
-        total_chunks: Total number of chunks
+        base_type: Primary record type for this session
+        chunk_num: Current chunk number (unused, kept for API compatibility)
+        total_chunks: Total number of chunks (unused, kept for API compatibility)
         
     Returns:
-        Record type to use for this chunk
+        base_type unchanged
     """
-    # Always use base type for first and last chunks (reliability)
-    if chunk_num == 0 or chunk_num == total_chunks - 1:
-        return base_type
-    
-    # 20% chance to vary record type on middle chunks
-    if random.random() < 0.2:
-        # Define compatible alternative types for each base type
-        alternatives = {
-            RecordType.TXT: [RecordType.MX, RecordType.CNAME],
-            RecordType.A: [RecordType.AAAA, RecordType.TXT],
-            RecordType.AAAA: [RecordType.A, RecordType.TXT],
-            RecordType.MX: [RecordType.TXT, RecordType.CNAME],
-            RecordType.CNAME: [RecordType.TXT, RecordType.MX]
-        }
-        
-        possible_types = alternatives.get(base_type, [RecordType.TXT])
-        if possible_types:
-            return random.choice(possible_types)
-    
     return base_type
 
 
