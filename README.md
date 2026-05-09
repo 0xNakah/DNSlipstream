@@ -11,9 +11,9 @@ DNSlipstream is a covert C2 (Command & Control) framework that tunnels a reverse
 ```
 [Target Machine]                        [Attacker Machine]
   shell.py (client)                      serv.py (server)
-       |                                       |
+       |				       |
   Spawns /bin/sh or cmd.exe             Listens on UDP :53
-       |                                       |
+       |				       |
   stdout/stderr ──► encode()  ──► DNS TXT queries ──► parse_query()
   stdin          ◄── decode() ◄── DNS TXT replies ◄── packet_queue[]
 ```
@@ -180,6 +180,12 @@ DNSlipstream/
 ## Disclaimer
 
 DNSlipstream is intended for authorized penetration testing and security research only. Unauthorized use against systems you do not own or have explicit permission to test is illegal. The author assumes no liability for misuse.
+
+---
+
+## References
+
+DNSlipstream is inspired by and partially derived from **[Chashell](https://github.com/sysdream/chashell)** by [Sysdream](https://github.com/sysdream) (Nicolas Chatelain). Chashell is a Go-based reverse shell over DNS using XSalsa20-Poly1305 encryption and Protocol Buffers — the same core concepts used here. DNSlipstream is a Python reimplementation and extension of those ideas, adding multi-session persistence, a prompt_toolkit CLI, standalone binary builds, and additional transport/encoding improvements.
 
 ---
 
